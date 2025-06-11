@@ -23,7 +23,6 @@ export default function ChatPage() {
         try {
             // Set a timeout for the request
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
             
             const res = await fetch('/api/chatbot', {
                 method: 'POST',
@@ -33,8 +32,6 @@ export default function ChatPage() {
                 body: JSON.stringify({ query: input }),
                 signal: controller.signal
             });
-            
-            clearTimeout(timeoutId);
             
             if (!res.ok) {
                 if (res.status === 504 || res.status === 502 || res.status === 503) {
@@ -78,104 +75,116 @@ export default function ChatPage() {
     
     const processResponse = (textResponse: string) => {
         try {
-            // Ensure proper line breaks in the response
-            // Replace single newlines with double newlines for markdown
-            let formattedText = textResponse;
-            
-            // Check if the response contains a tool_applied section
-            if (textResponse.includes('<tool_applied>')) {
-                // Extract the main text before the tool output
-                const mainText = textResponse.split('<tool_applied>')[0].trim();
+            // Check if this is an alarm tag search result
+            if (textResponse.includes('search for alarm tags') && textResponse.includes('Result =')) {
+                // Extract the introduction and result count
+                const lines = textResponse.split('\n');
+                let formattedText = '';
                 
-                // Format the response to extract tags from the JSON
-                formattedText = mainText + "\n\n";
+                // Process the text line by line
+                let inTable = false;
+                let additionalText = '';
+                let captureAdditional = false;
                 
-                // Try to extract tags from the JSON in the tool output
-                try {
-                    // Extract the JSON part
-                    const toolStartIndex = textResponse.indexOf('<tool_applied>');
-                    const toolEndIndex = textResponse.indexOf('</tool_applied>');
+                // ADDED: Variables to track table headers and column positions
+                let headerLine = '';
+                let separatorLine = '';
+                let sourceDocColumnIndex = -1;
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
                     
-                    if (toolStartIndex !== -1 && toolEndIndex !== -1) {
-                        const toolContent = textResponse.substring(
-                            toolStartIndex + '<tool_applied>'.length, 
-                            toolEndIndex
-                        );
+                    // Skip empty lines
+                    if (!line) continue;
+                    
+                    // MODIFIED: Check if we're starting the table section and identify the Source Document column
+                    if (line.startsWith('| Optix Path') || line.startsWith('| Symbol Name')) {
+                        inTable = true;
+                        headerLine = line;
                         
-                        try {
-                            const toolData = JSON.parse(toolContent);
-                            
-                            if (toolData.result && typeof toolData.result === 'string') {
-                                // Try to extract tags from the search results
-                                const searchResults = toolData.result;
-                                
-                                if (searchResults.includes('Search results:')) {
-                                    // Extract tags from the search results
-                                    formattedText += "### Found Alarm Tags\n\n";
-                                    formattedText += "| Optix Path | Symbol Name | Data Type | Description |\n";
-                                    formattedText += "|------------|-------------|-----------|-------------|\n";
-                                    
-                                    // Parse the JSON objects in the search results
-                                    // Using a simpler approach to extract tag information
-                                    const paragraphs = searchResults.match(/"optixPath":\s*"[^"]+"/g);
-                                    let tagCount = 0;
-                                    
-                                    if (paragraphs) {
-                                        // For each paragraph that contains optixPath
-                                        for (let i = 0; i < paragraphs.length && tagCount < 20; i++) {
-                                            // Find the paragraph containing this optixPath
-                                            const startIndex = searchResults.indexOf(paragraphs[i]);
-                                            if (startIndex === -1) continue;
-                                            
-                                            // Extract a chunk of text that should contain the full tag
-                                            const chunk = searchResults.substring(startIndex, startIndex + 500);
-                                            
-                                            // Extract the individual fields
-                                            const optixPathMatch = chunk.match(/"optixPath":\s*"([^"]+)"/);
-                                            const symbolNameMatch = chunk.match(/"symbolName":\s*"([^"]+)"/);
-                                            const dataTypeMatch = chunk.match(/"dataType":\s*"([^"]+)"/);
-                                            const descriptionMatch = chunk.match(/"description":\s*"([^"]+)"/);
-                                            
-                                            if (optixPathMatch && symbolNameMatch && descriptionMatch) {
-                                                const optixPath = optixPathMatch[1];
-                                                const symbolName = symbolNameMatch[1];
-                                                const dataType = dataTypeMatch ? dataTypeMatch[1] : "N/A";
-                                                const description = descriptionMatch[1];
-                                                
-                                                if (description.toLowerCase().includes('alarm')) {
-                                                    formattedText += `| ${optixPath} | ${symbolName} | ${dataType} | ${description} |\n`;
-                                                    tagCount++;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    
-                                    if (tagCount === 0) {
-                                        formattedText += "No alarm tags found in the search results.\n";
-                                    } else if (tagCount === 20) {
-                                        formattedText += "\n*Showing first 20 results. There may be more alarm tags available.*\n";
-                                    }
-                                }
-                            }
-                        } catch (jsonParseError) {
-                            console.error('Error parsing tool data JSON:', jsonParseError);
-                            formattedText = textResponse;
+                        // ADDED: Find the index of the Source Document column
+                        const columns = line.split('|').map(col => col.trim());
+                        sourceDocColumnIndex = columns.findIndex(col => 
+                            col.includes('Source') && col.includes('Document'));
+                        
+                        // ADDED: If Source Document column is found, remove it from the header
+                        if (sourceDocColumnIndex !== -1) {
+                            const headerParts = line.split('|');
+                            headerParts.splice(sourceDocColumnIndex, 1);
+                            formattedText += headerParts.join('|') + '\n';
+                        } else {
+                            formattedText += line + '\n';
                         }
+                        continue;
                     }
-                } catch (jsonError) {
-                    console.error('Error parsing tool output:', jsonError);
-                    // Just use the text response if we can't parse the JSON
-                    formattedText = textResponse;
+                    
+                    // MODIFIED: Handle the separator line (usually |------|------|)
+                    if (line.startsWith('|--')) {
+                        separatorLine = line;
+                        
+                        // ADDED: If Source Document column is found, remove it from the separator
+                        if (sourceDocColumnIndex !== -1) {
+                            const separatorParts = line.split('|');
+                            separatorParts.splice(sourceDocColumnIndex, 1);
+                            formattedText += separatorParts.join('|') + '\n';
+                        } else {
+                            formattedText += line + '\n';
+                        }
+                        continue;
+                    }
+                    
+                    // Check if we're at the end of the table
+                    if (inTable && !line.startsWith('|')) {
+                        inTable = false;
+                        captureAdditional = true;
+                        additionalText += line + '\n\n';
+                        continue;
+                    }
+                    
+                    // MODIFIED: If we're in the table, process each row to remove the Source Document column
+                    if (inTable) {
+                        if (sourceDocColumnIndex !== -1) {
+                            const rowParts = line.split('|');
+                            rowParts.splice(sourceDocColumnIndex, 1);
+                            formattedText += rowParts.join('|') + '\n';
+                        } else {
+                            formattedText += line + '\n';
+                        }
+                        continue;
+                    }
+                    
+                    // If we're capturing additional text after the table
+                    if (captureAdditional) {
+                        additionalText += line + '\n\n';
+                        continue;
+                    }
+                    
+                    // If we're before the table, add the line to the formatted text
+                    formattedText += line + '\n\n';
                 }
+                
+                // Add the additional text after the table
+                if (additionalText) {
+                    formattedText += '\n' + additionalText;
+                }
+                
+                // Add metrics if they exist in the response
+                if (textResponse.includes('Retrieval Time:')) {
+                    const metricsMatch = textResponse.match(/Retrieval Time: ([\d.]+)s\nTotal Response Time: ([\d.]+)s\nUser Experience Time: ([\d.]+)s/);
+                    if (metricsMatch) {
+                        formattedText += `\n**Metrics:**\n- Retrieval Time: ${metricsMatch[1]}s\n- Total Response Time: ${metricsMatch[2]}s\n- User Experience Time: ${metricsMatch[3]}s\n`;
+                    }
+                }
+                
+                setResponseText(formattedText);
             } else {
-                // Ensure proper line breaks for plain text responses
-                // Replace single newlines with double newlines for markdown
-                formattedText = textResponse
-                    .replace(/\n(?!\n)/g, '\n\n')  // Replace single newlines with double newlines
+                // Handle regular text responses
+                let formattedText = textResponse
+                    .replace(/\n(?!\n)/g, '\n\n')  // Replace single newlines with double newlines for markdown
                     .replace(/\|\s*\|/g, '| |');   // Fix empty table cells
+                
+                setResponseText(formattedText);
             }
-            
-            setResponseText(formattedText);
         } catch (error) {
             console.error('Error processing response:', error);
             setResponseText(textResponse);
@@ -187,10 +196,10 @@ export default function ChatPage() {
     };
 
     return (
-        <div  className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
+        <div  className="flex flex-col items-center justify-center min-h-screen bg-gray-500 p-4">
             <h1  className="text-2xl font-bold mb-4">Chatbot</h1>
             
-            <div  className="w-full max-w-3xl">
+            <div  className="w-full max-w-4xl">
                 <div  className="flex gap-2 mb-4">
                     <input
                          type="text"
@@ -205,7 +214,7 @@ export default function ChatPage() {
                         className="border border-gray-300 p-2 flex-grow rounded"
                         placeholder="Type your message..."
                     />
-                    <button  
+                    <button    
                         onClick={sendQuery} 
                         className="bg-blue-500 text-white p-2 rounded hover:bg-blue-600 disabled:bg-blue-300"
                         disabled={loading}
@@ -224,7 +233,7 @@ export default function ChatPage() {
                     <div  className="p-4 border border-red-300 bg-red-100 text-red-700 rounded mb-4">
                         <p  className="mb-2">{error}</p>
                         {retryCount > 0 && retryCount < 3 && (
-                            <button  
+                            <button    
                                 onClick={handleRetry}
                                 className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700"
                             >
@@ -241,8 +250,8 @@ export default function ChatPage() {
                 )}
                 
                 {!loading && responseText && (
-                    <div  className="p-4 bg-white border rounded shadow-sm">
-                        <div  className="prose prose-sm max-w-none whitespace-pre-line">
+                    <div  className="p-4 bg-gray-800 border rounded shadow-sm max-h-[70vh] overflow-y-auto w-full max-w-4xl">
+                        <div  className="prose prose-sm max-w-none whitespace-pre-line text-white">
                             <ReactMarkdown  remarkPlugins={[remarkGfm]}>
                                 {responseText}
                             </ReactMarkdown>

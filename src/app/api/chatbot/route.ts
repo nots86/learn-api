@@ -10,7 +10,7 @@ interface ChatbotRequestBody {
 interface Tag {
   optixPath: string;
   symbolName: string;
-  sourceDocument?: string;
+  //sourceDocument?: string;
   description: string;
 }
 
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
         // Step 2: Send the user's query to the chatbot endpoint with the authentication cookies
         const chatbotResponse = await secureAxios.post<string  | ChatbotResponseData>(
-            'https://pschat.novonordisk.com/api/chatbot/nots@novonordisk.com/1747119291.358969/query',
+            'https://pschat.novonordisk.com/api/chatbot/nots@novonordisk.com/1747040832.0671475/query',
             { query },
             {
                 headers: {
@@ -55,6 +55,8 @@ export async function POST(req: NextRequest) {
         );
 
         console.log("Chatbot response received");
+        console.log("Chatbot response data:", chatbotResponse.data);
+        //console.log("Chatbot response headers:", chatbotResponse.headers);
         console.log("Chatbot response status:", chatbotResponse.status);
 
         // Step 3: Return the complete chatbot response to the frontend
